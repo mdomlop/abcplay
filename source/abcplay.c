@@ -10,8 +10,8 @@
 #include <ctype.h>
 #include <math.h>
 
-#define MUSIC "ABCDEFG abcdefg"
-#define DEFDURATION 150  // milisegundos
+
+#define DEFDURATION 100  // milisegundos
 
 // Defaults to EVDEV API:
 #define DEVICE "/dev/input/by-path/platform-pcspkr-event-spkr"
@@ -31,27 +31,32 @@
 
 #define A 440.00  // A4
 
+
+#define MAXSIZE 20
+
 struct Note {
     char name;
     float freq;
     int acc;
+    char accname;
     int octave;
-    int duration;
-    char color[20];
-};
+    char octavename[MAXSIZE];
+    int duration;  // milisegundos
+    char color[MAXSIZE];
+} note;
 
 
-#define ABCNOTES "CDEFGABcdefgabcz"
-#define ABCACCIDENTALS "^=_"     // Sostenido, natural y bemol
+#define ABCNOTES "ABCDEFGabcdefg"
+#define ABCACCIDENTALS "_=^"     // Sostenido, natural y bemol
 #define ABCOCTAVE ",'"           // Baja o sube una octava a la nota
 #define ABCDURATION "/123456789" // Duración de las notas
 
 
 // Función para emitir un sonido usando evdev
-void beep(float freq, int duration_ms) {
+void beep(void) {
     struct timespec ts;
     ts.tv_sec = 0;
-    ts.tv_nsec = duration_ms * 1000000;
+    ts.tv_nsec = note.duration * 1000000;
     int fd = open(DEVICE, O_WRONLY);
     if (fd == -1) {
         perror("No se pudo abrir el dispositivo de evdev");
@@ -61,7 +66,7 @@ void beep(float freq, int duration_ms) {
     struct input_event ev;
     ev.type = EV_SND; // Tipo de evento: sonido
     ev.code = SND_TONE; // Código del evento: tono
-    ev.value = freq; // Frecuencia del tono
+    ev.value = note.freq; // Frecuencia del tono
 
     // Enviar evento para iniciar el sonido
     if (write(fd, &ev, sizeof(ev)) == -1) {
@@ -70,7 +75,7 @@ void beep(float freq, int duration_ms) {
         exit(EXIT_FAILURE);
     }
 
-    //usleep(duration_ms * 1000); // Duración del tono
+    //usleep(note.duration * 1000); // Duración del tono
     nanosleep(&ts, NULL);
 
     // Detener el sonido
@@ -84,6 +89,11 @@ void beep(float freq, int duration_ms) {
     close(fd);
 }
 
+int checkmaxsize(int n) {
+    if (n<20) return 1;
+    return 0;
+}
+
 int checkchar(char c, char *s) {
 	/* Verifica que un caracter esté en una cadena */
 	int i;
@@ -92,11 +102,6 @@ int checkchar(char c, char *s) {
 	for (i=0; i<end; i++)
 		if (c == s[i]) return 1;
     return 0;
-}
-
-void printnote(struct Note note) {
-    //printf("%s%c:%f " RESET, note.color, note.name, note.freq);
-    printf("%s%c" RESET, note.color, note.name);
 }
 
 int getduration(char *s, int size, int start) {
@@ -125,16 +130,15 @@ int getduration(char *s, int size, int start) {
     return factor;
 }
 
-float getfreq(char c, int acc, int octave) {
+int setfreq(void) {
     /* Obtiene la frecuencia de una nota */
     const double semi_s = pow(2.0, 1.0 / 12.0);
     const int mynotes = 12;  // Número de notas en la escala cromática. Para octavar.
     int semitones = 0;
-    float freq;
+    char c = toupper(note.name); // name aux
 
-    if (c >= 'a' && c < 'h') { octave++; }
-    c = toupper(c);
-    if (c == 'Z') freq = 0.0;
+    if (note.name >= 'a' && c < 'h') { note.octave++; }
+    if (c == 'Z') note.freq = 0.0;
     else {
         switch (c) {
             case 'A':
@@ -144,81 +148,208 @@ float getfreq(char c, int acc, int octave) {
                 semitones = 2;
                 break;
             case 'C':
-                semitones = 3;
+                semitones = -9;
                 break;
             case 'D':
-                semitones = 5;
+                semitones = -7;
                 break;
             case 'E':
-                semitones = 7;
+                semitones = -5;
                 break;
             case 'F':
-                semitones = 8;
+                semitones = -4;
                 break;
             case 'G':
-                semitones = 10;
+                semitones = -2;
                 break;
             case '\0':
                 printf("Saliendo...\n");
-                return 0;
+                return 1;
             default:
                 printf("Nota no válida: '%c'\n", c);
-                return 1;
+                return 0;
         }
     }
 
-    semitones += octave * mynotes + acc;
+    semitones += note.octave * mynotes + note.acc;
 
-    freq = A * pow(semi_s, semitones);
-    return freq;
+    note.freq = A * pow(semi_s, semitones);
+    return 1;
 }
 
-int getacc(int index, char *s) {
+int * getmultiacc(char *s, int size, int start) {  // FIXME, please
+    /* Devuelve los semitonos a subir o bajar a la nota*/
+    static int acc[2];
+    int factor = 0;  // Para determinar si es sostenido o bemol
+    int i = start + 1;  // i es la nota, los accidentales vienen después
+    for (;i<size; i++) { // Bucle. Al parecer es válido: C^^
+        if (s[i] == '^') factor += 1;
+        else if (s[i] == '_') factor -= 1;
+        else if (s[i] == '=') factor = 0;
+        else {
+            acc[0] = 0;
+            acc[1] = start;
+            return acc;
+        }
+    }
+    acc[0] = factor;
+    acc[1] = i;  // El índice por donde debe proseguir el análisis de la cadena s
+
+    return acc;
+}
+
+int setacc(char *s, int start) {
+    /* Establece los semitonos a subir o bajar a la nota*/
+    int previous = start - 1;  // i es la nota, los accidentales vienen después
+    if (previous >= 0) {
+        char acc = s[previous];  // Sé que es ineficiente, pero claro.
+        if      (acc == '^') { note.accname = acc; note.acc = 1;  return 0; }
+        else if (acc == '_') { note.accname = acc; note.acc = -1; return 0; }
+        else if (acc == '=') { note.accname = acc; note.acc = 0;  return 0; }
+        else return 0;  // ¿Por qué no?
+    }
+    return 1;
+}
+
+int setduration(char *s, int size, int start) {
+    /* Establece los semitonos a subir o bajar a la nota*/
+    int next = start + 1;  // i es la nota, los accidentales vienen después
+    int duration = 1;
+    char c;
+    int div = 0;
+
+    if (next < size && s[next] == '/') {
+        div = 1;
+        next++;
+        duration = 2;
+    }
+
+    if (next < size && checkchar(s[next], "0123456789")) {
+        c = s[next];
+        duration = c-'0';  // to int
+    }
+
+    //printf("duration: %d\n", duration);
+    if (div) { note.duration = DEFDURATION / duration; return 2; }
+    else { note.duration = DEFDURATION * duration; return 1; }
+
     return 0;
 }
 
-int getoctave(int index, char *s) {
+int setmultiduration(char *s, int size, int start) {
+    printf("#### Empiezo en index %d: %c #####\n", start, s[start]);
+    /* Establece la duración de la nota */
+    char str_int[10];
+    int dur_idx = start;  // i es la nota, la duración viene después
+    int steps = 0;
+    int factor = 1;
 
+    while (dur_idx + 1 < size) {
+        if  (checkchar(s[dur_idx + 1], "0123456789")) {
+            str_int[steps] = s[dur_idx + 1];
+            dur_idx++; steps++;
+        }
+        else break;
+    }
+
+    factor = atoi(str_int);
+    note.duration = DEFDURATION * factor;
+
+    //printf("Igual: %c. Me voy\n", s[start]);
+    return steps;
+}
+
+
+
+int setoctave(char *s, int size, int start) {
+    int next;
+    int octave = 0;
+    int i = 0;
+
+    for (next = start + 1; next < size; next++) {
+        //if (checkmaxsize(i)) return 0;
+        if (s[next] == '\'') { note.octavename[i] = s[next]; octave++; i++; }
+        else if (s[next] == ',') { note.octavename[i] = s[next]; octave--; i++; }
+        else break;
+    }
+    note.octavename[i] = '\0';
+    //printf("Octave: %d\n", octave);
+    //printf("Octavename: %s\n", note.octavename);
+    note.octave = octave;
     return 0;
 }
 
-char * getcolor(char c) {
-    char name = toupper(c);
+int setcolor(void) {
+    char name = toupper(note.name);
         switch (name) {
             case 'C':
-                return CCOLOR;
+                strcpy(note.color, CCOLOR);
                 break;
             case 'D':
-                return DCOLOR;
+                strcpy(note.color, DCOLOR);
                 break;
             case 'E':
-                return ECOLOR;
+                strcpy(note.color, ECOLOR);
                 break;
             case 'F':
-                return FCOLOR;
+                strcpy(note.color, FCOLOR);
                 break;
             case 'G':
-                return GCOLOR;
+                strcpy(note.color, GCOLOR);
                 break;
             case 'A':
-                return ACOLOR;
+                strcpy(note.color, ACOLOR);
                 break;
             case 'B':
-                return BCOLOR;
+                strcpy(note.color, BCOLOR);
                 break;
             case 'z':
-                return ZCOLOR;
+                strcpy(note.color, ZCOLOR);
                 break;
             case '\0':
                 printf("Saliendo...\n");
-                return ZCOLOR;
+                return 1;
             default:
-                printf("Nota no válida: '%c'\n", name);
-                return ZCOLOR;
+                printf("Nota no válida: >%c<\n", note.name);
+                return 0;
         }
-    return ZCOLOR;
+    return 1;
 }
 
+
+void debugnote (char *s, int i) {
+    printf("index: %d char: %c\nname: %c\nfreq: %f\n"
+    "acc: %d\naccname: %c\noctave: %d\noctavename: %s\nduration: %d\n",
+            i, s[i],
+            note.name,
+            note.freq,
+            note.acc,
+            note.accname,
+            note.octave,
+            note.octavename,
+            note.duration
+            );
+}
+
+int strcopy(char *sdest, char *sorig, int start, int end) {
+    int size = strlen(sorig);
+    int dest_idx = 0;
+    if (start > size || end > size) return 0;
+    for (;start<end; start++) {
+        sdest[dest_idx] = sorig[start];
+        dest_idx++;
+    }
+    printf("Copiado: %s\n", sdest);
+    return dest_idx; // devuelve el número de caracteres copiados
+}
+
+void printnote(void) {
+    printf("%s%c%c%s (%d): %f\n" RESET,
+           note.color, note.accname, note.name, note.octavename,
+           note.duration, note.freq);
+    //printf("%s%c%c:%f\n" RESET, note.color, note.name, note.accname, note.freq);
+    //printf("%s%c" RESET, note.color, note.name);
+}
 
 int play(char *s) {
 	int i;
@@ -226,40 +357,51 @@ int play(char *s) {
 	char c;
     //int divide = 0;  // Si es 1 divide por factor, si no, multiplica.
 
-    struct Note note;
-
 	for (i=0; i<end; i++) {
 		c = s[i];
+        note.name = '\0';
+        note.freq = 0.0;
+        note.acc  = 0;
+        note.accname = '\0';
+        note.octave = 0;
         note.duration = DEFDURATION;
+        strcpy(note.color, RESET);
 
         if (checkchar(c, ABCNOTES)) {
             // Asignamos la nota encontrada
             note.name = c;
-            note.acc = getacc(i, s);
-            note.octave = getoctave(i, s);
-            note.freq = getfreq(note.name, note.acc, note.octave);
-            strcpy(note.color, getcolor(note.name));
+            setcolor();
+            setacc(s, i);
+            setoctave(s, end, i);
+            setduration(s, end, i);
+            setfreq();
+            //debugnote(s, i);
 
         }
-        else if (checkchar(c, ABCDURATION)) {
-            if (c != '/') note.duration = DEFDURATION * 2; // != Porque es más común multiplicar
-            else note.duration = DEFDURATION / 2;
-            printf("%c", c);
-            continue;
+        else if (checkchar(c, ABCACCIDENTALS)) continue;
+        else if (checkchar(c, ABCDURATION)) continue;
+        else if (checkchar(c, ABCOCTAVE)) continue;
+        else if (c == ' ') continue;
+        else  {  // Carácter no reconocido
+            printf(RESET "[Error] Caracter desconocido: >%c<\n", c);
+            return 0;
         }
-        else  { printf("%c", c); continue; }
 
 
-        //printf("%c:", c);
-        beep(note.freq, note.duration);
-        printnote(note);
+        printnote();
+        beep();
         fflush(stdout);
     }
     puts("");
-    return 0;
+    return 1;
 }
 
 int main() {
+    //FIXME No funciona c'2
+    //char MUSIC[] = "^C,,,,,,_C,,,,,C,,,,C,,,C,,C,Ccc'c''c'''c''''c'''''c''''''";
+    //char MUSIC[] = "C9'D9E9";
+    char MUSIC[] = "E2EB BAFD EBEB ADFD E2EB BAFA BcdB ADFA E2EB BAFD EBEB ADFD E2EB BAFA BcdB ADFA B2eB fBeB B2dB ADFA Bcef gfge dcdB ADFA B2GB FBEB B2dB ADFD B2GB FBDB dcdB ADFA B2GB FBEB B2dB ADFA BAGF EFGA BcdB ADFD";
 	play(MUSIC);
+    play(MUSIC);
     return 0;
 }
