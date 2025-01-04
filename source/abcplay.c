@@ -218,6 +218,8 @@ int setduration(char *s, int size, int start) {
     char c;
     int div = 0;
 
+    if (next < size && checkchar(s[next], ABCOCTAVE)) next++;
+
     if (next < size && s[next] == '/') {
         div = 1;
         next++;
@@ -345,8 +347,8 @@ int strcopy(char *sdest, char *sorig, int start, int end) {
 
 void printnote(void) {
     printf("%s%c%c%s (%d): %f\n" RESET,
-           note.color, note.accname, note.name, note.octavename,
-           note.duration, note.freq);
+            note.color, note.accname, note.name, note.octavename,
+            note.duration, note.freq);
     //printf("%s%c%c:%f\n" RESET, note.color, note.name, note.accname, note.freq);
     //printf("%s%c" RESET, note.color, note.name);
 }
@@ -399,9 +401,9 @@ int play(char *s) {
 int main() {
     //FIXME No funciona c'2
     //char MUSIC[] = "^C,,,,,,_C,,,,,C,,,,C,,,C,,C,Ccc'c''c'''c''''c'''''c''''''";
-    //char MUSIC[] = "C9'D9E9";
-    char MUSIC[] = "E2EB BAFD EBEB ADFD E2EB BAFA BcdB ADFA E2EB BAFD EBEB ADFD E2EB BAFA BcdB ADFA B2eB fBeB B2dB ADFA Bcef gfge dcdB ADFA B2GB FBEB B2dB ADFD B2GB FBDB dcdB ADFA B2GB FBEB B2dB ADFA BAGF EFGA BcdB ADFD";
+    char MUSIC[] = "c''''/";
+    //char MUSIC[] = "E2EB BAFD EBEB ADFD E2EB BAFA BcdB ADFA E2EB BAFD EBEB ADFD E2EB BAFA BcdB ADFA B2eB fBeB B2dB ADFA Bcef gfge dcdB ADFA B2GB FBEB B2dB ADFD B2GB FBDB dcdB ADFA B2GB FBEB B2dB ADFA BAGF EFGA BcdB ADFD";
+
 	play(MUSIC);
-    play(MUSIC);
     return 0;
 }
